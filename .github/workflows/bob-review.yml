@@ -36,9 +36,19 @@ on:
         default: ""
         type: string
     secrets:
+      # Anthropic credentials — AT LEAST ONE of ANTHROPIC_OAUTH_TOKEN /
+      # ANTHROPIC_API_KEY must be provided by the caller. Both are declared
+      # optional here so callers can supply either one; the action enforces the
+      # at-least-one rule and fails fast when neither is present. PRECEDENCE:
+      # OAuth wins — when both are set the action injects only
+      # CLAUDE_CODE_OAUTH_TOKEN, so the API key cannot silently shadow OAuth
+      # and exhaust pay-per-use credits.
+      ANTHROPIC_OAUTH_TOKEN:
+        required: false
+        description: "Anthropic OAuth token (recommended, from `claude setup-token`) for the headless Claude diff-review session. Takes precedence over ANTHROPIC_API_KEY."
       ANTHROPIC_API_KEY:
         required: false
-        description: "Anthropic API key for the headless Claude diff-review session."
+        description: "Anthropic API key (pay-per-use) for the headless Claude diff-review session. Optional fallback; ignored when ANTHROPIC_OAUTH_TOKEN is also set."
       BOB_INSTALL_TOKEN:
         required: false
         description: "GitHub App token or PAT with read:packages scope."
@@ -90,6 +100,12 @@ jobs:
           ANTHROPIC_MODEL: ${{ inputs.anthropic-model }}
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
+          # Anthropic auth: pass BOTH credentials through. At least one must be
+          # set; the action fails fast if neither is provided. OAuth WINS — when
+          # both are present the action injects only CLAUDE_CODE_OAUTH_TOKEN and
+          # omits ANTHROPIC_API_KEY so the key cannot shadow OAuth or burn
+          # pay-per-use credits.
+          anthropic-oauth-token: ${{ secrets.ANTHROPIC_OAUTH_TOKEN }}
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           bob-install-token: ${{ secrets.BOB_INSTALL_TOKEN }}
 
