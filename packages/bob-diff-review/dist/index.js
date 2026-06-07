@@ -30061,6 +30061,10 @@ async function run() {
     // we read it here to validate presence (the runner needs it available).
     const bobInstallToken = core.getInput("bob-install-token") || core.getInput("bob_install_token");
     const minSeverityForFailure = core.getInput("min-severity-for-failure") || core.getInput("min_severity_for_failure") || "high";
+    // Optional model override.  When provided (e.g. "claude-haiku-4-5") it is
+    // forwarded as ANTHROPIC_MODEL to the claude CLI subprocess so callers can
+    // select a cheaper model for cost-sensitive environments.
+    const anthropicModel = core.getInput("anthropic-model") || core.getInput("anthropic_model") || process.env["ANTHROPIC_MODEL"] || undefined;
     // Warn (non-fatal) when BOB_INSTALL_TOKEN is absent — the npm install step
     // will fail if packages need to be resolved, but the diff-review itself may
     // still work when the workspace is cached.
@@ -30163,11 +30167,15 @@ async function run() {
         //     log, applies a 10-minute timeout, and returns validated findings.
         // -----------------------------------------------------------------------
         core.info(`[bob-diff-review] Invoking bob-diff-review skill (target: ${targetDomainOverride})`);
+        if (anthropicModel) {
+            core.info(`[bob-diff-review] Using model override: ${anthropicModel}`);
+        }
         const bobFindings = await (0, bob_runner_js_1.runBobDiffReview)({
             repo: repoPath,
             diffFile: diffFilePath,
             targetDomainOverride,
             anthropicApiKey,
+            anthropicModel,
         });
         core.info(`[bob-diff-review] Bob review complete: ${bobFindings.findings.length} finding(s) ` +
             `from session ${bobFindings.session_id}`);
@@ -30547,7 +30555,48 @@ function resolveOutputDir(outputDir) {
  * @throws BobRunnerError on non-zero exit, timeout, or missing/invalid output.
  */
 async function runBobDiffReview(params) {
-    const { repo, diffFile, targetDomainOverride, anthropicApiKey, timeoutMs = exports.BOB_RUNNER_TIMEOUT_MS, } = params;
+    const { repo, diffFile, targetDomainOverride, anthropicApiKey, anthropicModel, timeoutMs = exports.BOB_RUNNER_TIMEOUT_MS, } = params;
+    // ---------------------------------------------------------------------------
+    // Mock mode: BOB_MOCK_FINDINGS_JSON bypass
+    //
+    // When the environment variable BOB_MOCK_FINDINGS_JSON is set to a
+    // non-empty string, skip the Claude subprocess entirely and return the
+    // pre-seeded findings JSON directly.  This is used by the live integration
+    // test (T3) to exercise the full pipeline (diff fetch, position map, review
+    // comment posting, check run update, session cache write) without consuming
+    // real Anthropic API credits.
+    //
+    // The value must be a valid JSON string matching DiffReviewFindings schema.
+    // A TypeError from validateDiffReviewFindings() is re-thrown as-is so the
+    // caller (action-entrypoint) can surface a clear schema-mismatch error.
+    //
+    // SECURITY: This bypass is only active when the env var is explicitly set.
+    // It must never be set in production workflows — guard with an Actions
+    // environment condition or a repo-level variable that is absent in prod.
+    // ---------------------------------------------------------------------------
+    const mockFindingsJson = process.env["BOB_MOCK_FINDINGS_JSON"];
+    if (mockFindingsJson) {
+        process.stdout.write(`[bob-runner] BOB_MOCK_FINDINGS_JSON set — bypassing Claude subprocess (mock mode).\n`);
+        let parsed;
+        try {
+            parsed = JSON.parse(mockFindingsJson);
+        }
+        catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            throw new BobRunnerError({
+                message: `BOB_MOCK_FINDINGS_JSON is not valid JSON: ${msg}`,
+                exitCode: null,
+                signal: null,
+                stderr: "",
+                timedOut: false,
+            });
+        }
+        // Override target_domain so the returned findings reflect the current run.
+        if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+            parsed["target_domain"] = targetDomainOverride;
+        }
+        return validateDiffReviewFindings(parsed);
+    }
     // 1. Resolve output directory.
     const outputDir = resolveOutputDir(params.outputDir);
     // 2. Build the command and arguments.
@@ -30573,10 +30622,12 @@ async function runBobDiffReview(params) {
     ];
     // 3. Build child process environment.
     //    Inherit the current env so PATH, HOME, etc. are available, then overlay
-    //    ANTHROPIC_API_KEY from the action input.
+    //    ANTHROPIC_API_KEY from the action input.  When anthropicModel is set,
+    //    also inject ANTHROPIC_MODEL so the claude CLI picks the specified model.
     const childEnv = {
         ...process.env,
         ANTHROPIC_API_KEY: anthropicApiKey,
+        ...(anthropicModel ? { ANTHROPIC_MODEL: anthropicModel } : {}),
     };
     // 4. Set up AbortController for the 10-minute timeout.
     const abortController = new AbortController();
