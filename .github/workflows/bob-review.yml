@@ -1,0 +1,154 @@
+###############################################################################
+# Bob Diff Review — reusable workflow (W1)
+#
+# This is the reusable workflow hosted in bobnetsec/bob-workflows. Target repos
+# reference it via:
+#
+#   jobs:
+#     bob-review:
+#       uses: bobnetsec/bob-workflows/.github/workflows/bob-review.yml@main
+#       secrets: inherit
+#
+# The workflow:
+#   1. Restores the Bob workspace from cache (C1 — ~/bob-workspace).
+#   2. Restores the Bob session from cache (C2 — ~/hacker-bob-sessions/gh-<id>).
+#   3. Sets SKIP_SURFACE_BUILD from the C2 symbol-index cache-hit output.
+#   4. Invokes the bob-diff-review action (bobnetsec/bob-workflows/packages/bob-diff-review@main).
+#
+# Required org-level secrets:
+#   ANTHROPIC_API_KEY  — Anthropic API key for the headless Claude runner.
+#   BOB_INSTALL_TOKEN  — GitHub App token or PAT (read:packages + contents:read)
+#                        used to pull @bobnetsec/* packages from GitHub Packages.
+#
+# Required org-level variables:
+#   BOB_VERSION        — Bob version tag (e.g. "v1.2.3") used to key the
+#                        Bob workspace cache (C1). Set at org level so all
+#                        repos share the same cached workspace entry.
+###############################################################################
+
+name: Bob Diff Review (reusable)
+
+# ---------------------------------------------------------------------------
+# Triggers
+# ---------------------------------------------------------------------------
+# pull_request: runs automatically on the bob-workflows repo itself for CI
+#               validation (opened, synchronize, reopened only).
+# workflow_call: invoked by target-repo caller workflows via `uses:` reference.
+#                secrets: inherit propagates org-level secrets without each
+#                caller needing to redeclare them.
+# ---------------------------------------------------------------------------
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+  workflow_call:
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: true
+        description: >
+          Anthropic API key for the headless Claude diff-review session.
+          Store as an org-level secret named ANTHROPIC_API_KEY.
+      BOB_INSTALL_TOKEN:
+        required: true
+        description: >
+          GitHub App installation token or fine-grained PAT with read:packages
+          and contents:read scopes. Used to install @bobnetsec/* packages.
+          Store as an org-level secret named BOB_INSTALL_TOKEN.
+
+jobs:
+  bob-diff-review:
+    name: Bob Diff Review
+    runs-on: ubuntu-latest
+
+    # -------------------------------------------------------------------------
+    # Fork guard
+    # Forked PRs do not receive org-level secrets. Skip the job entirely rather
+    # than failing mid-run on a missing ANTHROPIC_API_KEY or BOB_INSTALL_TOKEN.
+    # For workflow_call events (github.event_name == 'workflow_call') there is
+    # no pull_request context, so the guard passes through automatically.
+    # -------------------------------------------------------------------------
+    if: >
+      github.event_name == 'workflow_call' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+
+    # -------------------------------------------------------------------------
+    # Permissions
+    # Composite actions cannot declare a permissions block — it must live here
+    # at the job level.
+    #   pull-requests:write — post inline review comments on the PR
+    #   checks:write        — create and update the "Bob Diff Review" Check Run
+    #   contents:read       — fetch the PR diff
+    # -------------------------------------------------------------------------
+    permissions:
+      pull-requests: write
+      checks: write
+      contents: read
+
+    steps:
+      # -----------------------------------------------------------------------
+      # Checkout
+      # Fetch full history so the diff computation covers the entire branch.
+      # -----------------------------------------------------------------------
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # -----------------------------------------------------------------------
+      # C1 — Bob workspace cache
+      # Restores ~/bob-workspace keyed on runner OS and BOB_VERSION.
+      # On cache miss, checks out hacker-bob at BOB_VERSION and runs install.sh.
+      # On cache hit, skips install entirely.
+      # -----------------------------------------------------------------------
+      - name: Restore Bob workspace cache (C1)
+        id: cache-bob-workspace
+        uses: bobnetsec/bob-workflows/.github/actions/cache-bob-workspace@main
+        with:
+          bob_version: ${{ vars.BOB_VERSION }}
+          bob_install_token: ${{ secrets.BOB_INSTALL_TOKEN }}
+
+      # -----------------------------------------------------------------------
+      # C2 — Bob session cache
+      # Restores ~/hacker-bob-sessions/gh-<repository_id> keyed on the commit
+      # SHA with base-branch restore-key fallbacks.  After restore, checks for
+      # symbol-surface-index.json and sets cache-hit-symbol-index output.
+      # -----------------------------------------------------------------------
+      - name: Restore Bob session cache (C2)
+        id: cache-bob-session
+        uses: bobnetsec/bob-workflows/.github/actions/cache-bob-session@main
+        with:
+          repository_id: ${{ github.repository_id }}
+          sha: ${{ github.sha }}
+          base_ref: ${{ github.base_ref }}
+
+      # -----------------------------------------------------------------------
+      # Bob Diff Review action
+      # Invokes the compiled node20 action that runs the headless Claude diff
+      # review pipeline.
+      #
+      # SKIP_SURFACE_BUILD is set from the C2 symbol-index detection output so
+      # the action can skip the S3 route-extraction + symbol-index build phase
+      # when a warm session with a valid index was restored from cache.
+      # -----------------------------------------------------------------------
+      - name: Run Bob Diff Review
+        id: bob-diff-review
+        uses: bobnetsec/bob-workflows/packages/bob-diff-review@main
+        env:
+          SKIP_SURFACE_BUILD: ${{ steps.cache-bob-session.outputs.cache-hit-symbol-index }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          bob-install-token: ${{ secrets.BOB_INSTALL_TOKEN }}
+
+      # -----------------------------------------------------------------------
+      # Surface action outputs for downstream steps / notifications.
+      # always() ensures this runs even if the review step sets a failure
+      # conclusion so callers can still read findings_count.
+      # -----------------------------------------------------------------------
+      - name: Log review outputs
+        if: always()
+        shell: bash
+        run: |
+          echo "findings_count=${{ steps.bob-diff-review.outputs.findings_count }}"
+          echo "critical_count=${{ steps.bob-diff-review.outputs.critical_count }}"
+          echo "review_url=${{ steps.bob-diff-review.outputs.review_url }}"

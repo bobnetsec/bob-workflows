@@ -1,0 +1,90 @@
+name: 'Bob Diff Review'
+description: >
+  Run Hacker Bob's headless Claude-based diff review on an open pull request.
+  Posts inline PR review comments and a Check Run summarising findings by
+  severity. Requires ANTHROPIC_API_KEY and BOB_INSTALL_TOKEN secrets.
+
+branding:
+  color: 'orange'
+  icon: 'shield'
+
+# ---------------------------------------------------------------------------
+# INPUTS
+# Callers pass secrets via the with: block:
+#   with:
+#     github-token:      ${{ secrets.GITHUB_TOKEN }}
+#     anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+#     bob-install-token: ${{ secrets.BOB_INSTALL_TOKEN }}
+# Input names use hyphens to match getInput() calls in src/action-entrypoint.ts.
+# ---------------------------------------------------------------------------
+inputs:
+  github-token:
+    description: >
+      GitHub token used to post review comments on the pull request and to
+      create the "Bob Diff Review" Check Run. Must have pull-requests:write
+      and checks:write permissions. Declare those permissions in the calling
+      workflow:
+        permissions:
+          pull-requests: write
+          checks: write
+          contents: read
+    required: true
+
+  anthropic-api-key:
+    description: >
+      Anthropic API key used to authenticate the claude headless runner.
+      Store as the org-level secret ANTHROPIC_API_KEY and pass via
+      ${{ secrets.ANTHROPIC_API_KEY }}. Required — the review session cannot
+      start without a valid key.
+    required: true
+
+  bob-install-token:
+    description: >
+      GitHub App installation token (preferred) or fine-grained PAT with
+      read:packages and contents:read scopes. Used to authenticate npm
+      against npm.pkg.github.com for @bobnetsec/* packages. Store as the
+      org-level secret BOB_INSTALL_TOKEN and pass via
+      ${{ secrets.BOB_INSTALL_TOKEN }}. Required — package installation
+      will fail without this token.
+    required: true
+
+  min-severity-for-failure:
+    description: >
+      Minimum finding severity that causes the Check Run to report a failure
+      conclusion. Accepted values: "critical", "high", "medium", "low".
+      Defaults to "high" so that only critical or high findings block the PR
+      status badge.
+    required: false
+    default: 'high'
+
+# ---------------------------------------------------------------------------
+# OUTPUTS
+# Values set by core.setOutput() calls in src/action-entrypoint.ts.
+# ---------------------------------------------------------------------------
+outputs:
+  findings_count:
+    description: >
+      Total number of findings recorded by the Bob diff review session across
+      all severity levels.
+
+  critical_count:
+    description: >
+      Number of critical-severity findings recorded by the Bob diff review
+      session. Used to determine Check Run conclusion when min-severity-for-failure
+      is set to "critical".
+
+  review_url:
+    description: >
+      HTML URL of the GitHub pull request review posted by this action. Empty
+      string if the review step was skipped or failed non-fatally.
+
+# ---------------------------------------------------------------------------
+# RUNS
+# node20 matches GitHub's current LTS runner support. dist/index.js is the
+# ncc-bundled single-file entrypoint produced by `npm run build`.
+# Permissions (pull-requests:write, checks:write, contents:read) must be
+# declared in the calling workflow — action.yml cannot set permissions.
+# ---------------------------------------------------------------------------
+runs:
+  using: 'node20'
+  main: 'dist/index.js'
