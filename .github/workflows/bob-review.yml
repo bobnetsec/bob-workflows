@@ -13,6 +13,16 @@ name: Bob Diff Review
 
 on:
   workflow_call:
+    inputs:
+      anthropic-model:
+        description: >
+          Optional Anthropic model override forwarded to the claude subprocess as
+          ANTHROPIC_MODEL. Use a cost-optimised model (e.g. "claude-haiku-4-5")
+          to reduce API spend on high-volume repos. Leave empty to use the claude
+          CLI default.
+        required: false
+        default: ''
+        type: string
     secrets:
       ANTHROPIC_API_KEY:
         required: false
@@ -57,6 +67,7 @@ jobs:
         uses: bobnetsec/bob-workflows/packages/bob-diff-review@main
         env:
           SKIP_SURFACE_BUILD: ${{ steps.cache-bob-session.outputs.cache-hit-symbol-index }}
+          ANTHROPIC_MODEL: ${{ inputs.anthropic-model }}
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
