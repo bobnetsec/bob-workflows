@@ -1,7 +1,8 @@
 name: Cache Bob Workspace
 description: >
   Restore ~/bob-workspace from cache keyed on runner OS and BOB_VERSION.
-  On cache miss, installs claude CLI and hacker-bob skill bundle.
+  On cache miss, installs claude CLI and extracts the hacker-bob skill bundle
+  to ~/.claude/skills so that /bob-diff-review is available headlessly.
   On cache hit, restores everything and adds ~/bob-workspace/bin to PATH.
 
 inputs:
@@ -33,8 +34,10 @@ runs:
       id: cache-bob
       uses: actions/cache@v4
       with:
-        path: ~/bob-workspace
-        key: ${{ runner.os }}-bob-workspace-${{ inputs.bob_version }}
+        path: |
+          ~/bob-workspace
+          ~/.claude/skills
+        key: ${{ runner.os }}-bob-workspace-${{ inputs.bob_version }}-v2
 
     - name: Install Claude CLI and hacker-bob
       if: steps.cache-bob.outputs.cache-hit != 'true'
@@ -51,27 +54,21 @@ runs:
         # 1. Install Claude Code CLI
         echo "Installing claude CLI..."
         npm install -g @anthropic-ai/claude-code --prefix "$INSTALL_TARGET" 2>&1 | tail -5
-        CLAUDE_BIN="$(ls "$INSTALL_TARGET/bin/claude" 2>/dev/null || \
-                      ls "$INSTALL_TARGET/lib/node_modules/@anthropic-ai/claude-code/bin/claude" 2>/dev/null || \
-                      which claude 2>/dev/null || true)"
-        if [[ -z "$CLAUDE_BIN" ]]; then
-          # Try the npm global bin location
-          CLAUDE_BIN="$(npm bin -g --prefix "$INSTALL_TARGET" 2>/dev/null)/claude"
-        fi
-        echo "Claude binary: $CLAUDE_BIN"
+        echo "Claude binary check..."
+        ls "$INSTALL_TARGET/bin/claude" 2>/dev/null && echo "found at $INSTALL_TARGET/bin/claude" || echo "not in bin/"
 
-        # 2. Install hacker-bob skill bundle into ~/bob-workspace
-        echo "Installing hacker-bob@${NPM_VERSION} skill bundle..."
-        mkdir -p "$INSTALL_TARGET/.claude/skills"
-        # Download just the skill file from npm tarball
+        # 2. Install hacker-bob skill bundle into ~/.claude/skills
+        #    Claude resolves user-level skills from ~/.claude/skills/<skill-name>/SKILL.md
+        echo "Installing hacker-bob@${NPM_VERSION} skill bundle to ~/.claude/skills..."
+        mkdir -p "$HOME/.claude/skills"
         cd /tmp
         npm pack "hacker-bob@${NPM_VERSION}" 2>&1 | tail -3
         TARBALL="$(ls hacker-bob-*.tgz 2>/dev/null | head -1)"
         if [[ -n "$TARBALL" ]]; then
-          tar xzf "$TARBALL" --strip-components=1 -C "$INSTALL_TARGET" \
-            "package/.claude" 2>/dev/null || true
+          tar xzf "$TARBALL" --strip-components=2 -C "$HOME/.claude/skills" \
+            "package/.claude/skills" 2>/dev/null || true
           echo "Extracted skill files from npm tarball"
-          ls "$INSTALL_TARGET/.claude/" 2>/dev/null || true
+          ls "$HOME/.claude/skills/" 2>/dev/null | head -10 || true
         fi
 
         echo "Bob workspace setup complete at $INSTALL_TARGET"
@@ -85,4 +82,6 @@ runs:
         echo "$(npm bin -g --prefix "$INSTALL_TARGET" 2>/dev/null || true)" >> "$GITHUB_PATH"
         # Verify claude is accessible
         export PATH="$INSTALL_TARGET/bin:$PATH"
-        claude --version 2>/dev/null && echo "claude CLI is on PATH" || echo "claude CLI not found in PATH (may need to use full path)"
+        CLAUDE_VER="$(claude --version 2>/dev/null)" && echo "claude CLI is on PATH: $CLAUDE_VER" || echo "claude CLI not found in PATH (may need to use full path)"
+        # Verify skills installed
+        ls "$HOME/.claude/skills/" 2>/dev/null | head -5 || echo "no skills found in ~/.claude/skills/"
