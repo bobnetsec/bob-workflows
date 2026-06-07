@@ -1,0 +1,27 @@
+name: Bob Diff Review Simple Test
+on:
+  workflow_call:
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: true
+      BOB_INSTALL_TOKEN:
+        required: true
+
+jobs:
+  bob-diff-review:
+    name: Bob Diff Review
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      checks: write
+      contents: read
+    steps:
+      - name: Test step
+        shell: bash
+        run: |
+          echo "Reusable workflow ran successfully"
+          if [ -n "$ANTHROPIC_API_KEY" ]; then echo "ANTHROPIC_API_KEY is set (masked)"; fi
+          if [ -n "$BOB_INSTALL_TOKEN" ]; then echo "BOB_INSTALL_TOKEN is set (masked)"; fi
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          BOB_INSTALL_TOKEN: ${{ secrets.BOB_INSTALL_TOKEN }}
