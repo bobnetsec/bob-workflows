@@ -1,9 +1,11 @@
 name: Cache Bob Workspace
 description: >
   Restore ~/bob-workspace from cache keyed on runner OS and BOB_VERSION.
-  On cache miss, installs claude CLI and copies the bundled bob-diff-review
-  skill to ~/.claude/skills so that /bob-diff-review is available headlessly.
-  On cache hit, restores everything and adds ~/bob-workspace/bin to PATH.
+  On cache miss, installs the claude CLI, the hacker-bob runtime (which bundles
+  the Bob MCP server at mcp/server.js), and copies the bundled bob-diff-review
+  skill to ~/.claude/skills. Always exports BOB_MCP_SERVER_PATH so the headless
+  claude invocation can wire the Bob MCP (PATH A). On cache hit, restores
+  everything and re-derives PATH + BOB_MCP_SERVER_PATH.
 
 inputs:
   bob_version:
@@ -19,6 +21,9 @@ outputs:
   cache-hit:
     description: "'true' when a matching cache entry was restored."
     value: ${{ steps.cache-bob.outputs.cache-hit }}
+  mcp-server-path:
+    description: "Absolute path to the Bob MCP server.js, or '' when unavailable."
+    value: ${{ steps.mcp-path.outputs.path }}
 
 runs:
   using: composite
@@ -37,7 +42,8 @@ runs:
         path: |
           ~/bob-workspace
           ~/.claude/skills
-        key: ${{ runner.os }}-bob-workspace-${{ inputs.bob_version }}-v4
+        # v5: workspace now also contains the hacker-bob runtime (Bob MCP server).
+        key: ${{ runner.os }}-bob-workspace-${{ inputs.bob_version }}-v5
 
     - name: Install Claude CLI
       if: steps.cache-bob.outputs.cache-hit != 'true'
@@ -52,6 +58,28 @@ runs:
         ls "$INSTALL_TARGET/bin/claude" 2>/dev/null && echo "claude binary found" || echo "claude binary not found in bin/"
 
         echo "Bob workspace setup complete at $INSTALL_TARGET"
+
+    - name: Install hacker-bob runtime (Bob MCP server)
+      if: steps.cache-bob.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        INSTALL_TARGET="$HOME/bob-workspace"
+        # npm rejects a leading "v" as a version spec (treats it as a dist-tag),
+        # so strip it: v1.3.5 -> 1.3.5. hacker-bob is a public npm package whose
+        # tarball bundles the full mcp/ runtime; its declared deps (proxy-agent,
+        # psl, claude-agent-sdk) are installed alongside so server.js resolves.
+        VER="${BOB_VERSION#v}"
+        echo "Installing hacker-bob@${VER} ..."
+        npm install -g "hacker-bob@${VER}" --prefix "$INSTALL_TARGET" 2>&1 | tail -5
+        SERVER="$INSTALL_TARGET/lib/node_modules/hacker-bob/mcp/server.js"
+        if [[ -f "$SERVER" ]]; then
+          echo "Bob MCP server installed at $SERVER"
+        else
+          echo "::warning::hacker-bob installed but mcp/server.js not found at $SERVER — PATH A will be unavailable"
+        fi
+      env:
+        BOB_VERSION: ${{ inputs.bob_version }}
 
     - name: Install bob-diff-review skill
       if: steps.cache-bob.outputs.cache-hit != 'true'
@@ -87,3 +115,32 @@ runs:
         CLAUDE_VER="$(claude --version 2>/dev/null)" && echo "claude CLI is on PATH: $CLAUDE_VER" || echo "claude CLI not found in PATH"
         # Verify skills installed
         ls "$HOME/.claude/skills/" 2>/dev/null | head -5 || echo "no skills found in ~/.claude/skills/"
+
+    - name: Export Bob MCP server path
+      id: mcp-path
+      shell: bash
+      run: |
+        # Runs on BOTH cache hit and miss: the cached ~/bob-workspace contains the
+        # hacker-bob runtime, so re-derive the path either way. Exporting to
+        # GITHUB_ENV makes BOB_MCP_SERVER_PATH visible to later job steps,
+        # including the bob-diff-review action whose runner reads it to wire the
+        # Bob MCP (PATH A). When the server is missing or fails to boot, leave it
+        # unset so the runner falls back to PATH B.
+        SERVER="$HOME/bob-workspace/lib/node_modules/hacker-bob/mcp/server.js"
+        if [[ -f "$SERVER" ]]; then
+          # Boot probe: confirm the server responds to an MCP initialize before
+          # advertising it, so a broken install degrades to PATH B rather than
+          # failing the review.
+          PROBE='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"probe","version":"0"}}}'
+          if echo "$PROBE" | timeout 20 node "$SERVER" 2>/dev/null | grep -q '"result"'; then
+            echo "BOB_MCP_SERVER_PATH=$SERVER" >> "$GITHUB_ENV"
+            echo "path=$SERVER" >> "$GITHUB_OUTPUT"
+            echo "Bob MCP server verified and exported: $SERVER"
+          else
+            echo "path=" >> "$GITHUB_OUTPUT"
+            echo "::warning::Bob MCP server at $SERVER did not boot; PATH A disabled (falling back to PATH B)"
+          fi
+        else
+          echo "path=" >> "$GITHUB_OUTPUT"
+          echo "::warning::Bob MCP server not found at $SERVER; PATH A disabled (falling back to PATH B)"
+        fi
