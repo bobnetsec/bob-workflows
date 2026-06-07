@@ -30552,12 +30552,13 @@ async function runBobDiffReview(params) {
     const outputDir = resolveOutputDir(params.outputDir);
     // 2. Build the command and arguments.
     //
-    //    claude --dangerously-skip-permissions --skill bob-diff-review \
-    //      -- --repo <abs-path> --diff-file <path> \
-    //         --target-domain-override <gh-id> --output-dir <tmp-dir>
+    //    claude --dangerously-skip-permissions --print \
+    //      "/bob-diff-review --repo <abs-path> --diff-file <path>
+    //         --target-domain-override <gh-id> --output-dir <tmp-dir>"
     //
-    // Skills are invoked as a slash-command prompt in print mode rather than
-    // via a --skill flag (which is not a supported CLI option).
+    // Skills are invoked as a slash-command prompt in print (-p) mode. The
+    // claude CLI does not support a --skill flag; skills resolve via /skill-name
+    // in the prompt argument.
     const skillPrompt = [
         `/bob-diff-review`,
         `--repo`, path.resolve(repo),
