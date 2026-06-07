@@ -21,7 +21,7 @@ on:
           to reduce API spend on high-volume repos. Leave empty to use the claude
           CLI default.
         required: false
-        default: ''
+        default: ""
         type: string
     secrets:
       ANTHROPIC_API_KEY:
@@ -80,3 +80,4 @@ jobs:
           echo "findings_count=${{ steps.bob-diff-review.outputs.findings_count }}"
           echo "critical_count=${{ steps.bob-diff-review.outputs.critical_count }}"
           echo "review_url=${{ steps.bob-diff-review.outputs.review_url }}"
+
