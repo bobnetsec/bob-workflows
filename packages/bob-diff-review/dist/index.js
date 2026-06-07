@@ -30335,9 +30335,9 @@ run().catch((err) => {
  *
  * Spawns the claude CLI as a child process:
  *
- *   claude --dangerously-skip-permissions --skill bob-diff-review \
- *     -- --repo <abs-path> --diff-file <path> \
- *        --target-domain-override <gh-id> --output-dir <tmp-dir>
+ *   claude --dangerously-skip-permissions --print \
+ *     "/bob-diff-review --repo <abs-path> --diff-file <path> \
+ *        --target-domain-override <gh-id> --output-dir <tmp-dir>"
  *
  * Lifecycle:
  *   1. Create a temp output directory under os.tmpdir().
@@ -30555,14 +30555,20 @@ async function runBobDiffReview(params) {
     //    claude --dangerously-skip-permissions --skill bob-diff-review \
     //      -- --repo <abs-path> --diff-file <path> \
     //         --target-domain-override <gh-id> --output-dir <tmp-dir>
+    //
+    // Skills are invoked as a slash-command prompt in print mode rather than
+    // via a --skill flag (which is not a supported CLI option).
+    const skillPrompt = [
+        `/bob-diff-review`,
+        `--repo`, path.resolve(repo),
+        `--diff-file`, path.resolve(diffFile),
+        `--target-domain-override`, targetDomainOverride,
+        `--output-dir`, outputDir,
+    ].join(" ");
     const claudeArgs = [
         "--dangerously-skip-permissions",
-        "--skill", "bob-diff-review",
-        "--",
-        "--repo", path.resolve(repo),
-        "--diff-file", path.resolve(diffFile),
-        "--target-domain-override", targetDomainOverride,
-        "--output-dir", outputDir,
+        "--print",
+        skillPrompt,
     ];
     // 3. Build child process environment.
     //    Inherit the current env so PATH, HOME, etc. are available, then overlay
