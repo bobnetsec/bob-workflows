@@ -37,7 +37,7 @@ runs:
         path: |
           ~/bob-workspace
           ~/.claude/skills
-        key: ${{ runner.os }}-bob-workspace-${{ inputs.bob_version }}-v2
+        key: ${{ runner.os }}-bob-workspace-${{ inputs.bob_version }}-v3
 
     - name: Install Claude CLI and hacker-bob
       if: steps.cache-bob.outputs.cache-hit != 'true'
@@ -60,12 +60,15 @@ runs:
         # 2. Install hacker-bob skill bundle into ~/.claude/skills
         #    Claude resolves user-level skills from ~/.claude/skills/<skill-name>/SKILL.md
         echo "Installing hacker-bob@${NPM_VERSION} skill bundle to ~/.claude/skills..."
-        mkdir -p "$HOME/.claude/skills"
+        mkdir -p "$HOME/.claude"
         cd /tmp
         npm pack "hacker-bob@${NPM_VERSION}" 2>&1 | tail -3
         TARBALL="$(ls hacker-bob-*.tgz 2>/dev/null | head -1)"
         if [[ -n "$TARBALL" ]]; then
-          tar xzf "$TARBALL" --strip-components=2 -C "$HOME/.claude/skills" \
+          # Tarball path: package/.claude/skills/<name>/SKILL.md
+          # --strip-components=2 strips "package" and ".claude", leaving skills/<name>/SKILL.md
+          # Extracting to $HOME/.claude/ places skills at $HOME/.claude/skills/<name>/SKILL.md
+          tar xzf "$TARBALL" --strip-components=2 -C "$HOME/.claude" \
             "package/.claude/skills" 2>/dev/null || true
           echo "Extracted skill files from npm tarball"
           ls "$HOME/.claude/skills/" 2>/dev/null | head -10 || true
