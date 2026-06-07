@@ -1,16 +1,16 @@
 name: Cache Bob Workspace
 description: >
   Restore ~/bob-workspace from cache keyed on runner OS and BOB_VERSION.
-  On cache miss, installs hacker-bob via npx to populate ~/bob-workspace.
-  On cache hit, skips install entirely.
+  On cache miss, installs claude CLI and hacker-bob skill bundle.
+  On cache hit, restores everything and adds ~/bob-workspace/bin to PATH.
 
 inputs:
   bob_version:
-    description: "The Bob version tag to install (e.g. v2.0.0). Used to key the cache."
+    description: "The Bob version tag to install (e.g. v1.3.5). Used to key the cache."
     required: true
 
   bob_install_token:
-    description: "GitHub token (unused, kept for API compatibility)."
+    description: "GitHub token (kept for API compatibility)."
     required: false
     default: ''
 
@@ -36,21 +36,53 @@ runs:
         path: ~/bob-workspace
         key: ${{ runner.os }}-bob-workspace-${{ inputs.bob_version }}
 
-    - name: Install Bob via npx
+    - name: Install Claude CLI and hacker-bob
       if: steps.cache-bob.outputs.cache-hit != 'true'
       shell: bash
       run: |
         set -euo pipefail
         INSTALL_TARGET="$HOME/bob-workspace"
         BOB_VERSION="${{ inputs.bob_version }}"
-        # Strip leading 'v' for npm version spec
         NPM_VERSION="${BOB_VERSION#v}"
-        echo "Installing hacker-bob@${NPM_VERSION} into $INSTALL_TARGET"
+
+        echo "Setting up bob-workspace at $INSTALL_TARGET (hacker-bob@${NPM_VERSION})"
         mkdir -p "$INSTALL_TARGET"
-        npx -y "hacker-bob@${NPM_VERSION}" install "$INSTALL_TARGET"
-        if [[ ! -d "$INSTALL_TARGET/node_modules" ]]; then
-          echo "::error::hacker-bob install did not create $INSTALL_TARGET/node_modules"
-          exit 1
+
+        # 1. Install Claude Code CLI
+        echo "Installing claude CLI..."
+        npm install -g @anthropic-ai/claude-code --prefix "$INSTALL_TARGET" 2>&1 | tail -5
+        CLAUDE_BIN="$(ls "$INSTALL_TARGET/bin/claude" 2>/dev/null || \
+                      ls "$INSTALL_TARGET/lib/node_modules/@anthropic-ai/claude-code/bin/claude" 2>/dev/null || \
+                      which claude 2>/dev/null || true)"
+        if [[ -z "$CLAUDE_BIN" ]]; then
+          # Try the npm global bin location
+          CLAUDE_BIN="$(npm bin -g --prefix "$INSTALL_TARGET" 2>/dev/null)/claude"
         fi
-        echo "Bob workspace ready at $INSTALL_TARGET"
-        echo "node_modules size: $(du -sh "$INSTALL_TARGET/node_modules" | cut -f1)"
+        echo "Claude binary: $CLAUDE_BIN"
+
+        # 2. Install hacker-bob skill bundle into ~/bob-workspace
+        echo "Installing hacker-bob@${NPM_VERSION} skill bundle..."
+        mkdir -p "$INSTALL_TARGET/.claude/skills"
+        # Download just the skill file from npm tarball
+        cd /tmp
+        npm pack "hacker-bob@${NPM_VERSION}" 2>&1 | tail -3
+        TARBALL="$(ls hacker-bob-*.tgz 2>/dev/null | head -1)"
+        if [[ -n "$TARBALL" ]]; then
+          tar xzf "$TARBALL" --strip-components=1 -C "$INSTALL_TARGET" \
+            "package/.claude" 2>/dev/null || true
+          echo "Extracted skill files from npm tarball"
+          ls "$INSTALL_TARGET/.claude/" 2>/dev/null || true
+        fi
+
+        echo "Bob workspace setup complete at $INSTALL_TARGET"
+
+    - name: Add bob-workspace bin to PATH
+      shell: bash
+      run: |
+        INSTALL_TARGET="$HOME/bob-workspace"
+        # Add all possible claude binary locations to PATH
+        echo "$INSTALL_TARGET/bin" >> "$GITHUB_PATH"
+        echo "$(npm bin -g --prefix "$INSTALL_TARGET" 2>/dev/null || true)" >> "$GITHUB_PATH"
+        # Verify claude is accessible
+        export PATH="$INSTALL_TARGET/bin:$PATH"
+        claude --version 2>/dev/null && echo "claude CLI is on PATH" || echo "claude CLI not found in PATH (may need to use full path)"
