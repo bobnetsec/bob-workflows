@@ -44,16 +44,20 @@ on:
   workflow_call:
     secrets:
       ANTHROPIC_API_KEY:
-        required: true
+        required: false
         description: >
           Anthropic API key for the headless Claude diff-review session.
           Store as an org-level secret named ANTHROPIC_API_KEY.
+          Note: required: false to avoid startup_failure when secrets: inherit
+          is used by callers — the action itself validates presence at runtime.
       BOB_INSTALL_TOKEN:
-        required: true
+        required: false
         description: >
           GitHub App installation token or fine-grained PAT with read:packages
           and contents:read scopes. Used to install @bobnetsec/* packages.
           Store as an org-level secret named BOB_INSTALL_TOKEN.
+          Note: required: false to avoid startup_failure when secrets: inherit
+          is used by callers — the action itself validates presence at runtime.
 
 jobs:
   bob-diff-review:
