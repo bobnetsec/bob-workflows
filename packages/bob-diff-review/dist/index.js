@@ -30077,6 +30077,9 @@ async function run() {
     // forwarded as ANTHROPIC_MODEL to the claude CLI subprocess so callers can
     // select a cheaper model for cost-sensitive environments.
     const anthropicModel = core.getInput("anthropic-model") || core.getInput("anthropic_model") || process.env["ANTHROPIC_MODEL"] || undefined;
+    // Optional explicit PR number. Used for manual (workflow_dispatch) runs where
+    // there is no pull_request event payload; the PR is then resolved via the API.
+    const prNumberInput = core.getInput("pr-number") || core.getInput("pr_number") || "";
     // Integration test bypass: pre-seeded findings JSON (see action.yml for docs).
     // This takes precedence over BOB_MOCK_FINDINGS_JSON env var when set as an
     // action input so it can be injected cleanly via workflow `with:` rather than
@@ -30102,27 +30105,52 @@ async function run() {
     // -------------------------------------------------------------------------
     const { context, getOctokit } = loadGithub();
     const { owner, repo } = context.repo;
+    const octokit = getOctokit(githubToken);
+    // Resolve the PR to review. Two paths:
+    //   - pull_request event: read head SHA + number from the payload.
+    //   - workflow_dispatch (or any non-PR event): fetch the PR named by the
+    //     pr-number input via the API. This makes manual re-runs / backfills work.
+    let headSha;
+    let pullNumber;
     const pr = context.payload.pull_request;
-    if (!pr) {
-        core.setFailed("This action must be triggered by a pull_request event. " +
-            "context.payload.pull_request is undefined.");
+    if (pr) {
+        headSha = pr.head.sha;
+        pullNumber = pr.number;
+    }
+    else if (prNumberInput) {
+        const parsed = parseInt(prNumberInput, 10);
+        if (!Number.isInteger(parsed) || parsed <= 0) {
+            core.setFailed(`Invalid pr-number input: "${prNumberInput}". Expected a positive integer.`);
+            return;
+        }
+        try {
+            const { data } = await octokit.rest.pulls.get({ owner, repo, pull_number: parsed });
+            headSha = data.head.sha;
+            pullNumber = data.number;
+        }
+        catch (err) {
+            core.setFailed(`Failed to fetch PR #${parsed} from ${owner}/${repo}: ` +
+                `${err instanceof Error ? err.message : String(err)}`);
+            return;
+        }
+    }
+    else {
+        core.setFailed("No pull request to review. Trigger this action on a pull_request event, " +
+            "or pass the 'pr-number' input for manual (workflow_dispatch) runs.");
         return;
     }
-    const headSha = pr.head.sha;
-    const pullNumber = pr.number;
     if (!headSha) {
-        core.setFailed("pull_request.head.sha is missing from the event payload.");
+        core.setFailed("Could not resolve the pull request head SHA.");
         return;
     }
     // -------------------------------------------------------------------------
-    // 3. Create Octokit and start the check run (in_progress)
+    // 3. Start the check run (in_progress)
     //
     //    checkRunId is null if GITHUB_TOKEN lacks checks:write — the pipeline
     //    continues without the check run (PR comments still post).
     //    See GITHUB_TOKEN permission requirements in:
     //      .github/workflows/bob-diff-review.yml -> jobs.bob-diff-review.permissions
     // -------------------------------------------------------------------------
-    const octokit = getOctokit(githubToken);
     let checkRunId = null;
     // Accumulate pipeline outputs so the finally block can always call
     // completeCheckRun with a terminal conclusion.
