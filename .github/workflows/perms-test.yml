@@ -1,0 +1,14 @@
+name: Permissions Test Reusable
+on:
+  workflow_call:
+
+jobs:
+  perms-test:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      checks: write
+      contents: read
+    steps:
+      - name: Test
+        run: echo "Permissions reusable workflow ran"
