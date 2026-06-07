@@ -13,6 +13,16 @@ name: Bob Diff Review
 
 on:
   workflow_call:
+    inputs:
+      anthropic-model:
+        description: >
+          Optional Anthropic model override forwarded to the claude subprocess as
+          ANTHROPIC_MODEL. Use a cost-optimised model (e.g. "claude-haiku-4-5")
+          to reduce API spend on high-volume repos. Leave empty to use the claude
+          CLI default.
+        required: false
+        default: ""
+        type: string
     secrets:
       ANTHROPIC_API_KEY:
         required: false
@@ -61,6 +71,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           bob-install-token: ${{ secrets.BOB_INSTALL_TOKEN }}
+          anthropic-model: ${{ inputs.anthropic-model }}
 
       - name: Log review outputs
         if: always()
@@ -69,3 +80,4 @@ jobs:
           echo "findings_count=${{ steps.bob-diff-review.outputs.findings_count }}"
           echo "critical_count=${{ steps.bob-diff-review.outputs.critical_count }}"
           echo "review_url=${{ steps.bob-diff-review.outputs.review_url }}"
+
