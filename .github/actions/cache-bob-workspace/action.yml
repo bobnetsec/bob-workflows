@@ -1,8 +1,8 @@
 name: Cache Bob Workspace
 description: >
   Restore ~/bob-workspace from cache keyed on runner OS and BOB_VERSION.
-  On cache miss, checks out hacker-bob at BOB_VERSION and runs install.sh
-  to populate ~/bob-workspace/node_modules. On cache hit, skips install.
+  On cache miss, installs hacker-bob via npx to populate ~/bob-workspace.
+  On cache hit, skips install entirely.
 
 inputs:
   bob_version:
@@ -10,7 +10,7 @@ inputs:
     required: true
 
   bob_install_token:
-    description: "GitHub token with read access to the hacker-bob source repo."
+    description: "GitHub token (unused, kept for API compatibility)."
     required: false
     default: ''
 
@@ -36,27 +36,20 @@ runs:
         path: ~/bob-workspace
         key: ${{ runner.os }}-bob-workspace-${{ inputs.bob_version }}
 
-    - name: Check out hacker-bob source
-      if: steps.cache-bob.outputs.cache-hit != 'true'
-      uses: actions/checkout@v4
-      with:
-        repository: vmihalis/hacker-bob
-        ref: ${{ inputs.bob_version }}
-        path: _hacker_bob_src
-        token: ${{ inputs.bob_install_token != '' && inputs.bob_install_token || github.token }}
-
-    - name: Install Bob into ~/bob-workspace
+    - name: Install Bob via npx
       if: steps.cache-bob.outputs.cache-hit != 'true'
       shell: bash
       run: |
         set -euo pipefail
         INSTALL_TARGET="$HOME/bob-workspace"
-        SRC="${GITHUB_WORKSPACE}/_hacker_bob_src"
-        echo "Installing Bob ${{ inputs.bob_version }} into $INSTALL_TARGET"
+        BOB_VERSION="${{ inputs.bob_version }}"
+        # Strip leading 'v' for npm version spec
+        NPM_VERSION="${BOB_VERSION#v}"
+        echo "Installing hacker-bob@${NPM_VERSION} into $INSTALL_TARGET"
         mkdir -p "$INSTALL_TARGET"
-        bash "$SRC/install.sh" "$INSTALL_TARGET"
+        npx -y "hacker-bob@${NPM_VERSION}" install "$INSTALL_TARGET"
         if [[ ! -d "$INSTALL_TARGET/node_modules" ]]; then
-          echo "::error::install.sh did not create $INSTALL_TARGET/node_modules"
+          echo "::error::hacker-bob install did not create $INSTALL_TARGET/node_modules"
           exit 1
         fi
         echo "Bob workspace ready at $INSTALL_TARGET"
