@@ -3,7 +3,7 @@ skill: bob-diff-review
 name: bob-diff-review
 description: >
   Headless Bob diff-review pipeline — invoked by bob-runner.ts via
-  'claude --dangerously-skip-permissions --skill bob-diff-review'.
+  'claude --dangerously-skip-permissions --print "/bob-diff-review -- ..."'.
   Ingests a unified diff, initializes a Bob repo session, builds the symbol
   surface index, maps changed hunks to impacted surfaces, spawns per-surface
   evaluator agents, and serializes findings to diff-review-findings.json.
@@ -85,11 +85,8 @@ only: `if [ -n "$ANTHROPIC_API_KEY" ]; then echo present; fi`.
 ## Headless Invocation (from bob-runner.ts)
 
 ```bash
-claude --dangerously-skip-permissions --skill bob-diff-review -- \
-  --repo "$REPO" \
-  --diff-file "$DIFF_FILE" \
-  --target-domain-override "$TARGET_DOMAIN" \
-  --output-dir "$OUTPUT_DIR"
+claude --dangerously-skip-permissions --print \
+  "/bob-diff-review --repo $REPO --diff-file $DIFF_FILE --target-domain-override $TARGET_DOMAIN --output-dir $OUTPUT_DIR"
 ```
 
 Paths that contain spaces must be quoted. `bob-runner.ts` is responsible for
