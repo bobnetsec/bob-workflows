@@ -7,6 +7,18 @@
 #     bob-review:
 #       uses: bobnetsec/bob-workflows/.github/workflows/bob-review.yml@main
 #       secrets: inherit
+#
+# CRITICAL: Callers from a different repository must declare permissions at
+# the workflow level (not job level — job-level permissions are not allowed
+# on workflow_call jobs). Add this to your caller workflow:
+#
+#   permissions:
+#     pull-requests: write
+#     checks: write
+#     contents: read
+#
+# Without this, GitHub raises startup_failure because the called workflow's
+# job declares permissions that the caller's token cannot provide.
 ###############################################################################
 
 name: Bob Diff Review
@@ -36,6 +48,14 @@ jobs:
     name: Bob Diff Review
     runs-on: ubuntu-latest
 
+    # -------------------------------------------------------------------------
+    # Permissions
+    # Composite actions cannot declare a permissions block — it must live here
+    # at the job level.
+    #   pull-requests:write — post inline review comments on the PR
+    #   checks:write        — create and update the "Bob Diff Review" Check Run
+    #   contents:read       — fetch the PR diff
+    # -------------------------------------------------------------------------
     permissions:
       pull-requests: write
       checks: write
@@ -80,4 +100,3 @@ jobs:
           echo "findings_count=${{ steps.bob-diff-review.outputs.findings_count }}"
           echo "critical_count=${{ steps.bob-diff-review.outputs.critical_count }}"
           echo "review_url=${{ steps.bob-diff-review.outputs.review_url }}"
-
