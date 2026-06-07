@@ -82,7 +82,10 @@ runs:
         BOB_VERSION: ${{ inputs.bob_version }}
 
     - name: Install bob-diff-review skill
-      if: steps.cache-bob.outputs.cache-hit != 'true'
+      # Always run (not cache-gated): the skill is cheap to copy and lives in
+      # this action's repo, so copying it every run keeps it current even on a
+      # workspace cache hit — otherwise a cached ~/.claude/skills would mask
+      # SKILL.md updates.
       shell: bash
       run: |
         set -euo pipefail

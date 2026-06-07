@@ -71,16 +71,55 @@ steps in order, and write `diff-review-findings.json` to `--output-dir`.
 ## Environment Requirements
 
 The runner environment MUST supply:
-- `ANTHROPIC_API_KEY` — Anthropic API key (org-level secret `ANTHROPIC_API_KEY`,
-  injected via `env: ANTHROPIC_API_KEY: ${{ inputs.anthropic_api_key }}` in
-  `action.yml`). Without it the claude subprocess cannot authenticate.
+- Exactly one Anthropic credential injected by the runner — see
+  [Authentication](#authentication). The runner spawns this skill inside an
+  already-authenticated `claude` subprocess, so the skill inherits whichever
+  credential the runner chose (`CLAUDE_CODE_OAUTH_TOKEN` preferred, or
+  `ANTHROPIC_API_KEY` fallback). The skill does not select auth itself.
 - `BOB_INSTALL_TOKEN` — GitHub App installation token or fine-grained PAT with
   `read:packages` + `contents:read` scopes (org-level secret `BOB_INSTALL_TOKEN`,
   mapped to `NODE_AUTH_TOKEN` for npm registry auth). Required for resolving
   private `@bobnetsec/*` packages during the action run.
 
-Neither secret value must appear in any log or output file. Confirm presence
-only: `if [ -n "$ANTHROPIC_API_KEY" ]; then echo present; fi`.
+No credential value must appear in any log or output file. Confirm presence
+only, e.g.:
+`if [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ] || [ -n "$ANTHROPIC_API_KEY" ]; then echo present; fi`.
+
+## Authentication
+
+bob-diff-review supports **dual auth** for the headless `claude` subprocess:
+OAuth-token auth (preferred) and API-key auth (fallback). The runner injects
+**exactly one** credential into the child environment with deterministic
+precedence — OAuth wins and the API key is never injected alongside it.
+
+| Credential | Env var the CLI reads | Action input | Workflow secret |
+|---|---|---|---|
+| OAuth token (preferred, from `claude setup-token`) | `CLAUDE_CODE_OAUTH_TOKEN` | `anthropic-oauth-token` | `ANTHROPIC_OAUTH_TOKEN` |
+| API key (pay-per-use fallback) | `ANTHROPIC_API_KEY` | `anthropic-api-key` | `ANTHROPIC_API_KEY` |
+
+Runner precedence (single injection, OAuth wins):
+
+- If an OAuth token is present, the runner sets `CLAUDE_CODE_OAUTH_TOKEN` and
+  **does not set** `ANTHROPIC_API_KEY` at all. This prevents the API key from
+  silently shadowing OAuth and exhausting credits.
+- Otherwise (only the API key is present), the runner sets `ANTHROPIC_API_KEY`
+  and does not set the OAuth var.
+- Exactly one credential is injected, never both.
+
+Action input and workflow contract:
+
+- `action.yml` exposes `anthropic-oauth-token` (optional) and
+  `anthropic-api-key` (optional). At least one must be provided; if neither is,
+  the action fails fast with an error naming both inputs and recommending OAuth.
+  `anthropic-api-key` is no longer `required: true`.
+- The workflow (`bob-review.yml`) and any caller declare both secrets as
+  optional with at least one required, and pass them through to the action's
+  `with:` block as `anthropic-oauth-token` and `anthropic-api-key`.
+- The existing `ANTHROPIC_MODEL` passthrough behavior is unchanged.
+
+This skill runs inside the already-authenticated subprocess and inherits
+whichever credential the runner injected; it never selects or reads the
+credential value, and never echoes either credential.
 
 ## Headless Invocation (from bob-runner.ts)
 
@@ -98,7 +137,7 @@ quoting before exec.
 |------|----------|-------------|
 | `--repo` | Yes | Absolute path to the locally checked-out repository. Must be an existing directory. Refuses remote shapes (`git@`, `git+`, `ssh://`, bare slugs). |
 | `--diff-file` | Yes | Path to a unified diff file (output of `git diff base...head`). The pipeline reads the full text from this file. |
-| `--target-domain-override` | No | Override for the Bob session `target_domain` slug. Defaults to the MCP-derived `repo-<safeName>-<sha8>` form when omitted. Useful for stable cache keys across re-runs on the same repository. |
+| `--target-domain-override` | No | GitHub context slug (e.g. `gh-<repository_id>`) stamped into `diff-review-findings.json` for traceability. NOT used for the Bob session: the MCP authority requires the server-derived `repo-<safeName>-<sha8>` slug, so the session domain always comes from `bob_init_repo_session`'s result. |
 | `--output-dir` | No | Directory where `diff-review-findings.json` is written. Defaults to `$RUNNER_TEMP/bob-diff-review` when running inside GitHub Actions, or a temp directory otherwise. |
 
 ## Pipeline Steps (S2-S6)
@@ -112,18 +151,24 @@ succeeding. Log each step start and completion to stdout.
    not exist, is not a directory, or looks like a remote ref (`git@`, `git+`,
    `ssh://`, bare `owner/repo` slugs). Surface the refusal as a structured JSON
    error and stop the pipeline.
-2. Detect whether `~/hacker-bob-sessions/<target_domain>` already exists.  If
-   it does, the C2 cache was restored; log `S2: resuming existing session`.
-   Call `bob_init_repo_session({ repo_path, target_domain, deep_mode: false,
-   egress_profile: "default" })` either way — the MCP server merges existing
-   state when the session dir is present rather than overwriting it.  Always
-   pass `target_domain` as `--target-domain-override` or the `gh-<repository_id>`
-   value from C2.  Surface any structured error (`repo_path_not_found`,
-   `repo_path_not_directory`, `target_domain_mismatch`, `session_corrupt`) as a
-   JSON object on stdout and stop.
-3. Verify `bob_read_session_nucleus({ target_domain })` returns successfully.
-   This confirms the session nucleus was written to MCP state and is readable
-   before proceeding.
+2. Call `bob_init_repo_session({ repo_path, deep_mode: false,
+   egress_profile: "default" })`.
+   **Do NOT pass a `target_domain` override.** The MCP repo-session authority
+   requires the server-derived `repo-<safeName>-<sha8>` slug and rejects any
+   other value (e.g. a `gh-<id>` slug) with `normalization_failed`. Omit
+   `target_domain` so the server derives it, then read the derived slug from
+   `result.data.target_domain` and use THAT value as `<target_domain>` for every
+   subsequent S2–S6 MCP call. `result.data.created === false` means the C2 cache
+   restored an existing session (resume); the server merges existing state either
+   way, so calling init is always safe. Surface any structured error
+   (`repo_path_not_found`, `repo_path_not_directory`, `session_corrupt`) as a JSON
+   object on stdout and stop.
+   Note: the `--target-domain-override` argument is GitHub context for the
+   findings file only — the runner stamps it into `diff-review-findings.json`.
+   Never pass it to the MCP repo-session tools.
+3. Verify `bob_read_session_nucleus({ target_domain })` returns successfully
+   (using the derived `<target_domain>` from step 2). This confirms the session
+   nucleus was written to MCP state and is readable before proceeding.
 4. Call `bob_repo_inventory({ target_domain })` to walk the repo and emit
    `surface.observed` events (writes `repo-inventory.json` to the session dir).
    Stop if inventory returns zero files or an error; surface the failure as a
@@ -134,7 +179,8 @@ succeeding. Log each step start and completion to stdout.
 
 Check whether `SKIP_SURFACE_BUILD=true` is set in the runner environment or
 whether `symbol-surface-index.json` already exists in the session directory
-(restored from cache). If either condition holds, log exactly:
+(`result.data.session_dir` from the S2 init result, restored from cache). If
+either condition holds, log exactly:
 
 ```
 CACHE HIT: skipping index build
@@ -253,8 +299,11 @@ prevents any output from being produced.
 - Never write to Bob MCP-owned audit-graded artifacts (`report.md`, `chains.md`,
   `evidence-packs.md`, `grade.md`, JSONL ledgers) via the Write tool. All
   structured state flows through the MCP tools listed in `allowed-tools`.
-- Do not echo `ANTHROPIC_API_KEY` or `BOB_INSTALL_TOKEN` values in any log,
-  output file, or tool call argument.
+- Do not echo any Anthropic credential (`CLAUDE_CODE_OAUTH_TOKEN` or
+  `ANTHROPIC_API_KEY`) or `BOB_INSTALL_TOKEN` values in any log, output file, or
+  tool call argument. The runner injects exactly one Anthropic credential
+  (OAuth preferred, API key fallback); the skill inherits it via env and must
+  never read or surface its value.
 - Exit non-zero only on unrecoverable errors. PATH B fallback and partial
   surface coverage are degraded but non-fatal outcomes; write whatever findings
   were produced and exit 0 with a warning summary.
