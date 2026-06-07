@@ -39,15 +39,6 @@ inputs:
     required: false
     default: 'high'
 
-  anthropic-model:
-    description: >
-      Optional Anthropic model identifier forwarded to the claude CLI subprocess
-      as ANTHROPIC_MODEL. Use a cost-optimised model (e.g. "claude-haiku-4-5")
-      for high-volume repositories or budget-constrained environments. Leave
-      empty to use the claude CLI default.
-    required: false
-    default: ''
-
 outputs:
   findings_count:
     description: >
@@ -66,4 +57,3 @@ outputs:
 runs:
   using: 'node20'
   main: 'dist/index.js'
-
